@@ -1,0 +1,18 @@
+[
+  {
+    "name": "Phonetic Lyrics",
+    "description": "Shows an approximate phonetic pronunciation guide for English lyrics, injected live below each line in Spotify's native Lyrics panel.",
+    "preview": "preview.gif",
+    "main": "phonetic-lyrics.js",
+    "readme": "README.md",
+    "authors": [
+      {
+        "name": "SevenJPG",
+        "url": "https://github.com/sevenjpg8"
+      }
+    ],
+    "tags": ["lyrics", "utility"],
+    "subtype": "lyrics-provider",
+    "type": "extension"
+  }
+]
