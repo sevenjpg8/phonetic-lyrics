@@ -11,8 +11,6 @@
         "url": "https://github.com/sevenjpg8"
       }
     ],
-    "tags": ["lyrics", "utility"],
-    "subtype": "lyrics-provider",
-    "type": "extension"
+    "tags": ["lyrics", "utility"]
   }
 ]
