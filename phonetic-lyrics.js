@@ -14,6 +14,7 @@
     return;
   }
 
+  const BUTTON_ID = "phonetic-lyrics-button";
   const INLINE_CLASS = "pl-inline-phonetic";
   const LYRIC_SELECTOR = [
     '[data-testid="lyrics-line"]',
@@ -45,6 +46,29 @@
     const style = document.createElement("style");
     style.id = "phonetic-lyrics-styles";
     style.textContent = `
+      #${BUTTON_ID} {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 32px;
+        width: 32px;
+        min-height: 32px;
+        color: var(--spice-subtext, #b3b3b3);
+      }
+      #${BUTTON_ID}:hover,
+      #${BUTTON_ID}:focus-visible {
+        color: var(--spice-text, #fff);
+      }
+      #${BUTTON_ID}[aria-pressed="true"] {
+        color: var(--spice-button-active, #1ed760);
+      }
+      #${BUTTON_ID} .pl-button-icon {
+        display: block;
+        flex: none;
+        width: 16px;
+        height: 16px;
+        fill: currentColor;
+      }
       .pl-inline-phonetic {
         display: block;
         font-size: 0.65em;
@@ -226,6 +250,7 @@
     const currentActivation = ++activation;
     enabled = !enabled;
     button.active = enabled;
+    button.element.setAttribute("aria-pressed", String(enabled));
     if (!enabled) {
       observer.disconnect();
       clearLyrics();
@@ -251,7 +276,7 @@
   }
 
   const ICON_SVG = `
-    <svg viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+    <svg class="pl-button-icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
       <path d="M2 2.5A1.5 1.5 0 0 1 3.5 1h9A1.5 1.5 0 0 1 14 2.5v8A1.5 1.5 0 0 1 12.5 12H8.7l-2.9 2.6a.5.5 0 0 1-.8-.37V12H3.5A1.5 1.5 0 0 1 2 10.5v-8Z"/>
       <text x="8" y="8.6" font-size="6" font-family="sans-serif" text-anchor="middle" fill="var(--spice-card, #181818)">Ph</text>
     </svg>
@@ -259,7 +284,8 @@
 
   injectStyles();
   const button = new Spicetify.Playbar.Button("Phonetic Lyrics", ICON_SVG, togglePhonetics);
-  button.element.id = "phonetic-lyrics-button";
+  button.element.id = BUTTON_ID;
+  button.element.setAttribute("aria-pressed", "false");
 
   Spicetify.Player.addEventListener("songchange", () => {
     if (enabled) {
