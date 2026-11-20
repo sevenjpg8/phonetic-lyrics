@@ -20,6 +20,21 @@
     '[data-testid="fullscreen-lyric"]',
     ".lyrics-lyricsContent-lyric",
     ".main-lyrics-lyricsContent-lyric",
+    // Spotify CSS classes from Spicetify's css-map, before aliases are applied.
+    ".BJ1zQ_ReY3QPaS7SW46s",
+    ".NiCdLCpp3o2z6nBrayOn",
+    ".WnslfFBWTgOIUgNH",
+    ".nw6rbs8R08fpPn7RWW2w",
+    ".o69qODXrbOkf6Tv7fa51",
+    ".mzAT53py1LJkDA4izCjN",
+  ].join(", ");
+  const LYRIC_TEXT_SELECTOR = [
+    ".lyrics-lyricsContent-text",
+    ".A3ohAQNHsDIMv2EM3Ytp",
+    ".BXlQFspJp_jq9SKhUSP3",
+    ".MmIREVIj8A2aFVvBZ2Ev",
+    ".a8PTgYsfzc07Np9G",
+    ".Dn2b5rh5_6c7YvX5uyak",
   ].join(", ");
 
   // ------------------------------------------------------------------------
@@ -169,9 +184,15 @@
 
   function syncLyrics() {
     frame = null;
-    for (const line of document.querySelectorAll(LYRIC_SELECTOR)) {
-      if (line.querySelector(LYRIC_SELECTOR)) continue;
+    // Prefer the element Spotify uses to render the words. An outer
+    // lyric row can have its own layout and hide children added beside it.
+    const textLines = [...document.querySelectorAll(LYRIC_TEXT_SELECTOR)]
+      .filter((line) => !line.querySelector(LYRIC_TEXT_SELECTOR));
+    const legacyLines = [...document.querySelectorAll(LYRIC_SELECTOR)]
+      .filter((line) => !line.closest(LYRIC_TEXT_SELECTOR) &&
+        !line.querySelector(`${LYRIC_SELECTOR}, ${LYRIC_TEXT_SELECTOR}`));
 
+    for (const line of [...textLines, ...legacyLines]) {
       const phonetic = line.querySelector(`:scope > .${INLINE_CLASS}`);
       const original = Array.from(line.childNodes, (node) =>
         node === phonetic ? "" : node.textContent
