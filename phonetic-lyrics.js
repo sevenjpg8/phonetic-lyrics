@@ -6,16 +6,21 @@
 
 (function PhoneticLyrics() {
   if (
-    !Spicetify?.Platform ||
-    !Spicetify?.Player ||
-    !Spicetify?.CosmosAsync
+    !globalThis.Spicetify?.Player?.addEventListener ||
+    !globalThis.Spicetify?.Playbar?.Button ||
+    !document.body
   ) {
     setTimeout(PhoneticLyrics, 300);
     return;
   }
 
-  const STORAGE_PREFIX = "phonetic-lyrics:";
-  const BUTTON_ID = "phonetic-lyrics-button";
+  const INLINE_CLASS = "pl-inline-phonetic";
+  const LYRIC_SELECTOR = [
+    '[data-testid="lyrics-line"]',
+    '[data-testid="fullscreen-lyric"]',
+    ".lyrics-lyricsContent-lyric",
+    ".main-lyrics-lyricsContent-lyric",
+  ].join(", ");
 
   // ------------------------------------------------------------------------
   // 1. Estilos
@@ -25,31 +30,6 @@
     const style = document.createElement("style");
     style.id = "phonetic-lyrics-styles";
     style.textContent = `
-      #${BUTTON_ID} {
-        background: transparent;
-        border: none;
-        cursor: pointer;
-        color: var(--spice-subtext, #b3b3b3);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 32px;
-        height: 32px;
-        border-radius: 50%;
-        margin: 0 4px;
-        transition: color 0.15s ease, background 0.15s ease;
-      }
-      #${BUTTON_ID}:hover {
-        color: var(--spice-text, #fff);
-        background: rgba(255,255,255,0.1);
-      }
-      #${BUTTON_ID}.pl-active {
-        color: var(--spice-button-active, #1ed760) !important;
-      }
-      #${BUTTON_ID} svg {
-        width: 16px;
-        height: 16px;
-      }
       .pl-inline-phonetic {
         display: block;
         font-size: 0.65em;
@@ -60,7 +40,8 @@
         pointer-events: none;
       }
       /* Resaltar la fonética en la línea activa nativa de Spotify */
-      [class*="active"] .pl-inline-phonetic,
+      .lyrics-lyricsContent-active .pl-inline-phonetic,
+      .main-lyrics-lyricsContent-active .pl-inline-phonetic,
       [data-active="true"] .pl-inline-phonetic {
         color: rgba(255, 255, 255, 0.95);
         font-weight: bold;
@@ -82,15 +63,16 @@
 
     cmuDictPromise = (async () => {
       try {
-        const res = await fetch(CMUDICT_URL);
-        let text = await res.text();
-        text = text.replace(/^\/\*\*.*?\*\/\s*/s, "");
-        text = text.replace(/^export const dictionary = /, "").replace(/;\s*$/, "");
-        cmuDict = JSON.parse(text);
-      } catch (e) {
-        cmuDict = {};
+        const res = await fetch(CMUDICT_URL, { signal: AbortSignal.timeout(10000) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const text = await res.text();
+        const match = text.match(/export const dictionary = (\{[\s\S]*\})\s*;?\s*$/);
+        if (!match) throw new Error("Formato del diccionario inesperado");
+        cmuDict = JSON.parse(match[1]);
+        return cmuDict;
+      } finally {
+        cmuDictPromise = null;
       }
-      return cmuDict;
     })();
 
     return cmuDictPromise;
@@ -162,186 +144,91 @@
     [/\bdon't\b/gi, "dóunt"], [/\bI'm\b/gi, "áim"], [/\byou're\b/gi, "yor"]
   ];
 
-  function convertWord(rawToken) {
-    const m = rawToken.match(/^([^a-zA-Z']*)([a-zA-Z']+)([^a-zA-Z']*)$/);
-    if (!m) return rawToken;
-    const [, prefix, core, suffix] = m;
-    const bare = core.toLowerCase().replace(/'/g, "");
-
-    if (EXCEPTIONS[bare]) return prefix + EXCEPTIONS[bare] + suffix;
-    if (cmuDict && cmuDict[bare]) return prefix + arpabetToSpanish(cmuDict[bare]) + suffix;
-
-    return prefix + bare + suffix;
-  }
+  const PHONETIC_PATTERN = new RegExp(
+    [...PHRASE_REDUCTIONS.map(([pattern]) => pattern.source), "[a-zA-Z]+(?:'[a-zA-Z]+)*"].join("|"),
+    "gi",
+  );
 
   function convertLine(line) {
-    if (!line || !line.trim()) return "";
-    let text = line;
-    for (const [pattern, replacement] of PHRASE_REDUCTIONS) {
-      text = text.replace(pattern, replacement);
-    }
-    return text
-      .split(/(\s+)/)
-      .map((token) => (/^\s+$/.test(token) ? token : convertWord(token)))
-      .join("");
-  }
-
-  async function generateAutoPhonetics(lines) {
-    await loadCmuDict();
-    return lines.map((l) => convertLine(l));
-  }
-
-  // ------------------------------------------------------------------------
-  // 3. Storage & API
-  // ------------------------------------------------------------------------
-  function loadManual(uri) {
-    try {
-      const raw = localStorage.getItem(`${STORAGE_PREFIX}${uri}`);
-      return raw ? JSON.parse(raw) : null;
-    } catch (e) {
-      return null;
-    }
-  }
-
-  async function fetchLyrics(trackUri) {
-    try {
-      const trackId = trackUri.split(":")[2];
-      const res = await Spicetify.CosmosAsync.get(
-        `https://spclient.wg.spotify.com/color-lyrics/v2/track/${trackId}?format=json&vocalRemoval=false`
+    return line.replace(/’/g, "'").replace(PHONETIC_PATTERN, (token) => {
+      const reduction = PHRASE_REDUCTIONS.find(([pattern]) =>
+        token.replace(pattern, "") !== token
       );
-      const lines = res?.lyrics?.lines || [];
-      return lines.map((l) => ({ text: l.words || "", timeMs: l.startTimeMs }));
-    } catch (e) {
-      return null;
-    }
-  }
+      if (reduction) return reduction[1];
 
-  // ------------------------------------------------------------------------
-  // 4. Inyección Inline y Sincronización DOM
-  // ------------------------------------------------------------------------
-  const state = {
-    open: false,
-    currentUri: null,
-    originalLines: [], // Declaración explícita del estado
-    displayLines: [],
-    timer: null
-  };
-
-  function cleanText(str) {
-    if (!str) return "";
-    return str.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "").trim();
-  }
-
-  function injectInlinePhonetics() {
-    if (!state.open || !state.displayLines.length || !state.originalLines.length) return;
-
-    const selectors = [
-      '.main-lyrics-lyricsContent-lyric',
-      '[data-testid="fullscreen-lyric"]',
-      'div[class*="LyricsContent__Lyric"]',
-      'div[class*="lyricsContent"] > div'
-    ];
-
-    let lyricElements = [];
-    for (const sel of selectors) {
-      const elements = document.querySelectorAll(sel);
-      if (elements.length > 0) {
-        lyricElements = Array.from(elements);
-        break;
-      }
-    }
-
-    if (!lyricElements.length) return;
-
-    lyricElements.forEach((lineEl) => {
-      if (lineEl.querySelector('.pl-inline-phonetic')) return;
-
-      const clone = lineEl.cloneNode(true);
-      const existingPhonetic = clone.querySelector('.pl-inline-phonetic');
-      if (existingPhonetic) existingPhonetic.remove();
-
-      const rawVisibleText = clone.textContent || "";
-      const cleanedVisible = cleanText(rawVisibleText);
-
-      if (!cleanedVisible) return;
-
-      const matchIndex = state.originalLines.findIndex((orig) => {
-        const cleanedOrig = cleanText(orig.text);
-        if (!cleanedOrig) return false;
-        return cleanedOrig === cleanedVisible || cleanedOrig.includes(cleanedVisible) || cleanedVisible.includes(cleanedOrig);
-      });
-
-      if (matchIndex !== -1 && state.displayLines[matchIndex]) {
-        const phoneticEl = document.createElement('span');
-        phoneticEl.className = 'pl-inline-phonetic';
-        phoneticEl.textContent = state.displayLines[matchIndex];
-        lineEl.appendChild(phoneticEl);
-      }
+      const word = token.toLowerCase();
+      if (Object.hasOwn(EXCEPTIONS, word)) return EXCEPTIONS[word];
+      if (cmuDict && Object.hasOwn(cmuDict, word)) return arpabetToSpanish(cmuDict[word]);
+      return token;
     });
   }
 
-  function startInlineSync() {
-    stopInlineSync();
-    state.timer = setInterval(() => {
-      injectInlinePhonetics();
-    }, 400);
-  }
+  const renderedLines = new WeakMap();
+  let enabled = false;
+  let frame = null;
 
-  function stopInlineSync() {
-    if (state.timer) {
-      clearInterval(state.timer);
-      state.timer = null;
+  function syncLyrics() {
+    frame = null;
+    for (const line of document.querySelectorAll(LYRIC_SELECTOR)) {
+      if (line.querySelector(LYRIC_SELECTOR)) continue;
+
+      const phonetic = line.querySelector(`:scope > .${INLINE_CLASS}`);
+      const original = Array.from(line.childNodes, (node) =>
+        node === phonetic ? "" : node.textContent
+      ).join("").trim();
+      if (phonetic && renderedLines.get(phonetic) === original) continue;
+      phonetic?.remove();
+      if (!/[a-z]/i.test(original)) continue;
+
+      const pronunciation = document.createElement("span");
+      pronunciation.className = INLINE_CLASS;
+      pronunciation.textContent = convertLine(original);
+      renderedLines.set(pronunciation, original);
+      line.appendChild(pronunciation);
     }
-    document.querySelectorAll('.pl-inline-phonetic').forEach((el) => el.remove());
   }
 
-  async function openInlinePhonetics() {
-    const track = Spicetify.Player.data?.item || Spicetify.Player.data?.track;
-    const uri = track?.uri;
-    if (!uri) {
-      Spicetify.showNotification("Asegúrate de reproducir una canción con letras.");
+  function scheduleSync() {
+    if (enabled && frame === null) frame = requestAnimationFrame(syncLyrics);
+  }
+
+  const observer = new MutationObserver(scheduleSync);
+  let activation = 0;
+
+  function clearLyrics() {
+    if (frame !== null) cancelAnimationFrame(frame);
+    frame = null;
+    document.querySelectorAll(`.${INLINE_CLASS}`).forEach((line) => line.remove());
+  }
+
+  async function togglePhonetics(button) {
+    const currentActivation = ++activation;
+    enabled = !enabled;
+    button.active = enabled;
+    if (!enabled) {
+      observer.disconnect();
+      clearLyrics();
       return;
     }
 
-    state.currentUri = uri;
-    const manual = loadManual(uri);
-    const lyricsData = await fetchLyrics(uri);
+    observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+    scheduleSync();
 
-    if (manual) {
-      state.originalLines = manual.text.split("\n").map((t) => ({ text: t }));
-      state.displayLines = manual.text.split("\n");
-    } else if (lyricsData && lyricsData.length) {
-      state.originalLines = lyricsData; // Se guarda la fuente original para la comparación de texto
-      state.displayLines = await generateAutoPhonetics(lyricsData.map((l) => l.text));
-    } else {
-      state.originalLines = [];
-      state.displayLines = [];
-      Spicetify.showNotification("No se obtuvieron letras para esta canción.");
-      return;
-    }
-
-    state.open = true;
-    const btn = document.getElementById(BUTTON_ID);
-    if (btn) btn.classList.add("pl-active");
-
-    startInlineSync();
-  }
-
-  function toggleOverlay(e) {
-    if (e) e.stopPropagation();
-    if (state.open) {
-      stopInlineSync();
-      state.open = false;
-      const btn = document.getElementById(BUTTON_ID);
-      if (btn) btn.classList.remove("pl-active");
-    } else {
-      openInlinePhonetics();
+    if (cmuDict) return;
+    try {
+      await loadCmuDict();
+      if (enabled && currentActivation === activation) {
+        clearLyrics();
+        scheduleSync();
+      }
+    } catch (error) {
+      if (enabled && currentActivation === activation) {
+        console.warn("[Phonetic Lyrics] Error al cargar el diccionario CMU:", error);
+        Spicetify.showNotification("Phonetic Lyrics: diccionario no disponible. Desactiva y vuelve a activar para reintentar.");
+      }
     }
   }
 
-  // ------------------------------------------------------------------------
-  // 5. Creación del Botón
-  // ------------------------------------------------------------------------
   const ICON_SVG = `
     <svg viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
       <path d="M2 2.5A1.5 1.5 0 0 1 3.5 1h9A1.5 1.5 0 0 1 14 2.5v8A1.5 1.5 0 0 1 12.5 12H8.7l-2.9 2.6a.5.5 0 0 1-.8-.37V12H3.5A1.5 1.5 0 0 1 2 10.5v-8Z"/>
@@ -349,58 +236,14 @@
     </svg>
   `;
 
-  function createButton() {
-    const btn = document.createElement("button");
-    btn.id = BUTTON_ID;
-    btn.title = "Activar/Desactivar Fonética";
-    btn.innerHTML = ICON_SVG;
-    btn.addEventListener("click", toggleOverlay);
-    return btn;
-  }
-
-  function injectButton() {
-    if (document.getElementById(BUTTON_ID)) return;
-
-    // Buscar el botón nativo del micrófono (letras)
-    const lyricsBtnSelectors = [
-      'button[data-testid="lyrics-button"]',
-      'button[aria-label*="Lyrics"]',
-      'button[aria-label*="Letras"]'
-    ];
-
-    let lyricsBtn = null;
-    for (const sel of lyricsBtnSelectors) {
-      lyricsBtn = document.querySelector(sel);
-      if (lyricsBtn) break;
-    }
-
-    const newBtn = createButton();
-
-    if (lyricsBtn && lyricsBtn.parentNode) {
-      // Insertar exactamente ANTES del botón del micrófono
-      lyricsBtn.parentNode.insertBefore(newBtn, lyricsBtn);
-    } else {
-      // Fallback: si no encuentra el micrófono, se añade al contenedor general
-      const container = document.querySelector(
-        ".main-nowPlayingBar-extraControls, .main-nowPlayingBar-right"
-      );
-      if (container) container.insertBefore(newBtn, container.firstChild);
-    }
-  }
-
-  // ------------------------------------------------------------------------
-  // Init
-  // ------------------------------------------------------------------------
   injectStyles();
-  injectButton();
-
-  const observer = new MutationObserver(() => injectButton());
-  observer.observe(document.body, { childList: true, subtree: true });
+  const button = new Spicetify.Playbar.Button("Phonetic Lyrics", ICON_SVG, togglePhonetics);
+  button.element.id = "phonetic-lyrics-button";
 
   Spicetify.Player.addEventListener("songchange", () => {
-    if (state.open) {
-      stopInlineSync();
-      openInlinePhonetics();
+    if (enabled) {
+      clearLyrics();
+      scheduleSync();
     }
   });
 })();
